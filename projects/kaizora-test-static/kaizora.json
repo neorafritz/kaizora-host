@@ -1,0 +1,11 @@
+{
+  "name": "Kaizora Test Static",
+  "slug": "kaizora-test-static",
+  "runtime": "static",
+  "domain": "test.kaizoratech.com",
+  "compose_file": "docker-compose.yml",
+  "resources": {
+    "cpu": 0.5,
+    "memory_mb": 256
+  }
+}

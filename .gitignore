@@ -1,0 +1,20 @@
+# Local tunnel credentials and per-project secrets
+.env
+.env.*
+!.env.example
+projects/**/.env
+projects/**/.env.*
+!projects/**/.env.example
+
+# Python and generated artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Local runtime data and backups
+backups/
+logs/

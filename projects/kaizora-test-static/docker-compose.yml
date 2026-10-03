@@ -1,0 +1,26 @@
+services:
+  web:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    expose:
+      - "80"
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+    networks:
+      - kaizora-network
+    mem_limit: 256m
+    cpus: 0.50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "--spider", "-q", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  kaizora-network:
+    external: true

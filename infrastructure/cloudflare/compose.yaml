@@ -1,0 +1,24 @@
+services:
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: kaizora-cloudflared
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CF_TUNNEL_TOKEN:?Set CF_TUNNEL_TOKEN in infrastructure/cloudflare/.env}
+    restart: unless-stopped
+    networks:
+      - kaizora-network
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  kaizora-network:
+    external: true
