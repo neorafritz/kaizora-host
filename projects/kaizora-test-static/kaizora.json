@@ -1,11 +1,21 @@
 {
-  "name": "Kaizora Test Static",
-  "slug": "kaizora-test-static",
+  "name": "kaizora-test-static",
+  "display_name": "Kaizora Test Static",
   "runtime": "static",
+  "branch": "main",
   "domain": "test.kaizoratech.com",
   "compose_file": "docker-compose.yml",
   "resources": {
     "cpu": 0.5,
-    "memory_mb": 256
+    "memory": "512m"
+  },
+  "health": {
+    "path": "/",
+    "timeout": 10
+  },
+  "backup": {
+    "project": true,
+    "database": true,
+    "volumes": true
   }
 }

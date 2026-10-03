@@ -1,10 +1,18 @@
-# Local tunnel credentials and per-project secrets
+# Local credentials and per-project secrets
 .env
 .env.*
 !.env.example
-projects/**/.env
-projects/**/.env.*
-!projects/**/.env.example
+!**/.env.example
+*.secret
+credentials/
+tokens/
+*.token
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519
 
 # Python and generated artifacts
 __pycache__/

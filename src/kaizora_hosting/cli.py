@@ -3,147 +3,32 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
+import ipaddress
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlsplit
+from urllib.request import ProxyHandler, build_opener
+
+from .config import load_node_config
+from .errors import KaizoraError
+from .manifest import Project, discover_projects, load_project
 
 
 DEFAULT_ROOT = Path("/srv/kaizora-hosting")
-PROJECTS_DIR = "projects"
-MANIFEST_NAME = "kaizora.json"
 NETWORK_NAME = "kaizora-network"
-SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 DATABASE_SERVICE_RE = re.compile(r"(?:^|[-_])(db|database|mysql|mariadb|postgres|postgresql)(?:$|[-_])", re.I)
-EXCLUDED_BACKUP_NAMES = {
-    ".git",
-    ".venv",
-    "venv",
-    "node_modules",
-    "__pycache__",
-    "dist",
-    "build",
-}
-
-
-class KaizoraError(Exception):
-    """An expected, user-correctable CLI error."""
-
-
-@dataclass(frozen=True)
-class Project:
-    path: Path
-    manifest: dict[str, Any]
-    compose_file: Path
-
-    @property
-    def slug(self) -> str:
-        return str(self.manifest["slug"])
-
-    @property
-    def title(self) -> str:
-        return str(self.manifest["name"])
-
-    @property
-    def domain(self) -> str:
-        return str(self.manifest.get("domain") or "-")
-
-    @property
-    def compose_name(self) -> str:
-        return f"kz-{self.slug}"
 
 
 def hosting_root(args: argparse.Namespace) -> Path:
     configured = args.root or os.environ.get("KZ_HOSTING_ROOT")
     return Path(configured or DEFAULT_ROOT).expanduser().resolve()
-
-
-def ensure_within(path: Path, parent: Path, description: str) -> Path:
-    resolved = path.resolve()
-    try:
-        resolved.relative_to(parent.resolve())
-    except ValueError as exc:
-        raise KaizoraError(f"{description} must stay inside {parent}.") from exc
-    return resolved
-
-
-def load_project(root: Path, slug: str) -> Project:
-    if not SLUG_RE.fullmatch(slug):
-        raise KaizoraError(f"Invalid project slug: {slug!r}.")
-
-    projects_dir = root / PROJECTS_DIR
-    if not projects_dir.is_dir():
-        raise KaizoraError(f"Projects directory is missing: {projects_dir}")
-
-    project_path = ensure_within(projects_dir / slug, projects_dir, "Project path")
-    if not project_path.is_dir():
-        raise KaizoraError(f"Project does not exist: {slug}")
-
-    manifest_path = ensure_within(project_path / MANIFEST_NAME, project_path, "Manifest path")
-    if not manifest_path.is_file():
-        raise KaizoraError(f"Project {slug} has no {MANIFEST_NAME} manifest.")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise KaizoraError(f"Could not read {manifest_path}: {exc}") from exc
-    if not isinstance(manifest, dict):
-        raise KaizoraError(f"{manifest_path} must contain a JSON object.")
-
-    name = manifest.get("name")
-    declared_slug = manifest.get("slug")
-    if not isinstance(name, str) or not name.strip():
-        raise KaizoraError(f"{manifest_path} needs a non-empty name.")
-    if declared_slug != slug:
-        raise KaizoraError(f"{manifest_path} slug must match its directory name ({slug}).")
-
-    compose_value = manifest.get("compose_file", "docker-compose.yml")
-    if not isinstance(compose_value, str) or not compose_value.strip():
-        raise KaizoraError(f"{manifest_path} compose_file must be a relative file path.")
-    compose_rel = Path(compose_value)
-    if compose_rel.is_absolute():
-        raise KaizoraError("compose_file must be relative to the project directory.")
-    compose_file = ensure_within(project_path / compose_rel, project_path, "Compose file")
-    if not compose_file.is_file():
-        raise KaizoraError(f"Compose file is missing: {compose_file}")
-
-    repository = manifest.get("repository")
-    branch = manifest.get("branch")
-    if repository is not None and (not isinstance(repository, str) or not repository.strip()):
-        raise KaizoraError(f"{manifest_path} repository must be a non-empty URL when set.")
-    if branch is not None and (not isinstance(branch, str) or not branch.strip()):
-        raise KaizoraError(f"{manifest_path} branch must be a non-empty ref when set.")
-    if repository and not branch:
-        raise KaizoraError(f"{manifest_path} needs a branch when repository is set.")
-
-    return Project(path=project_path, manifest=manifest, compose_file=compose_file)
-
-
-def discover_projects(root: Path) -> tuple[list[Project], list[str]]:
-    projects_dir = root / PROJECTS_DIR
-    if not projects_dir.exists():
-        return [], []
-    if not projects_dir.is_dir():
-        return [], [f"{projects_dir} is not a directory."]
-
-    projects: list[Project] = []
-    errors: list[str] = []
-    for entry in sorted(projects_dir.iterdir(), key=lambda item: item.name.lower()):
-        if not entry.is_dir():
-            continue
-        try:
-            projects.append(load_project(root, entry.name))
-        except KaizoraError as exc:
-            errors.append(str(exc))
-    return projects, errors
 
 
 def docker_path() -> str:
@@ -166,7 +51,12 @@ def compose_prefix(project: Project) -> list[str]:
     ]
 
 
-def run_capture(command: Sequence[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_capture(
+    command: Sequence[str],
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float = 15,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             list(command),
@@ -176,7 +66,10 @@ def run_capture(command: Sequence[str], cwd: Path | None = None, env: dict[str, 
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise KaizoraError(f"Command timed out: {Path(command[0]).name}.") from exc
     except OSError as exc:
         raise KaizoraError(f"Could not run {Path(command[0]).name}: {exc}") from exc
 
@@ -215,7 +108,7 @@ def parse_compose_json(output: str) -> list[dict[str, Any]]:
 
 
 def compose_rows(project: Project) -> list[dict[str, Any]]:
-    result = run_capture([*compose_prefix(project), "ps", "--format", "json"], cwd=project.path)
+    result = run_capture([*compose_prefix(project), "ps", "--all", "--format", "json"], cwd=project.path)
     if result.returncode:
         message = result.stderr.strip() or result.stdout.strip() or "Docker Compose could not read project status."
         raise KaizoraError(message)
@@ -230,6 +123,8 @@ def project_state(rows: list[dict[str, Any]]) -> str:
     if any(value == "unhealthy" for value in health):
         return "UNHEALTHY"
     if any(value == "starting" for value in health):
+        return "STARTING"
+    if any(state == "restarting" for state in states):
         return "STARTING"
     if all(state == "running" for state in states):
         return "RUNNING"
@@ -303,8 +198,8 @@ def print_project_table(projects: list[Project], stats: dict[str, str], docker_r
 
 
 def command_projects(args: argparse.Namespace) -> int:
-    root = hosting_root(args)
-    projects, errors = discover_projects(root)
+    config = load_node_config(hosting_root(args))
+    projects, errors = discover_projects(config.projects_path)
     for error in errors:
         print(f"WARN: {error}", file=sys.stderr)
     version, _ = docker_info()
@@ -322,20 +217,20 @@ def command_projects(args: argparse.Namespace) -> int:
         ], indent=2))
     else:
         print("KAIZORA HOSTING")
-        print("NODE  KZ-HOME-01")
+        print(f"NODE  {config.name}")
         print_project_table(projects, stats, bool(version))
     return 1 if errors else 0
 
 
 def command_status(args: argparse.Namespace) -> int:
-    root = hosting_root(args)
-    projects, errors = discover_projects(root)
+    config = load_node_config(hosting_root(args))
+    projects, errors = discover_projects(config.projects_path)
     for error in errors:
         print(f"WARN: {error}", file=sys.stderr)
 
     version, issue = docker_info()
     print("KAIZORA HOSTING")
-    print("NODE  KZ-HOME-01")
+    print(f"NODE  {config.name}")
     if version:
         print(f"DOCKER  {version}")
     else:
@@ -343,7 +238,7 @@ def command_status(args: argparse.Namespace) -> int:
 
     if args.project:
         try:
-            project = load_project(root, args.project)
+            project = load_project(config.projects_path, args.project)
             rows = compose_rows(project) if version else []
             print(f"PROJECT  {project.slug}")
             print(f"STATUS   {project_state(rows) if version else 'UNKNOWN'}")
@@ -363,15 +258,18 @@ def git_identity(remote: str) -> tuple[str, str] | None:
     value = remote.strip()
     if not value:
         return None
-    if "://" in value:
-        parsed = urlsplit(value)
-        host = parsed.hostname or ""
-        path = parsed.path.lstrip("/")
-    else:
-        match = re.fullmatch(r"(?:[^@/]+@)?([^:/]+):(.+)", value)
-        if not match:
-            return None
-        host, path = match.groups()
+    try:
+        if "://" in value:
+            parsed = urlsplit(value)
+            host = parsed.hostname or ""
+            path = parsed.path.lstrip("/")
+        else:
+            match = re.fullmatch(r"(?:[^@/]+@)?([^:/]+):(.+)", value)
+            if not match:
+                return None
+            host, path = match.groups()
+    except ValueError:
+        return None
     path = path.rstrip("/")
     if path.endswith(".git"):
         path = path[:-4]
@@ -413,8 +311,7 @@ def update_from_git(project: Project) -> None:
     env["GIT_TERMINAL_PROMPT"] = "0"
     result = run_capture([git, "-C", str(project.path), "pull", "--ff-only", "origin", branch], env=env)
     if result.returncode:
-        message = result.stderr.strip() or "Git pull failed."
-        raise KaizoraError(message)
+        raise KaizoraError("Git pull failed; check network access and the project's Git credential setup.")
     if result.stdout.strip():
         print(result.stdout.strip())
 
@@ -433,6 +330,13 @@ def compose_config(project: Project) -> dict[str, Any]:
     return config
 
 
+def _is_database_service(name: str, service: dict[str, Any]) -> bool:
+    image = str(service.get("image") or "").lower()
+    return bool(DATABASE_SERVICE_RE.search(name)) or any(
+        engine in image for engine in ("mysql", "mariadb", "postgres", "postgresql")
+    )
+
+
 def validate_compose(project: Project) -> dict[str, Any]:
     config = compose_config(project)
     services = config.get("services")
@@ -445,6 +349,8 @@ def validate_compose(project: Project) -> dict[str, Any]:
         raise KaizoraError(f"{NETWORK_NAME} must be declared as an external network.")
 
     issues: list[str] = []
+    total_cpu = 0.0
+    total_memory = 0
     for name, service in services.items():
         if not isinstance(service, dict):
             issues.append(f"{name}: service configuration is invalid")
@@ -461,10 +367,22 @@ def validate_compose(project: Project) -> dict[str, Any]:
 
         deploy = service.get("deploy", {})
         limits = deploy.get("resources", {}).get("limits", {}) if isinstance(deploy, dict) else {}
-        if not (service.get("mem_limit") or (isinstance(limits, dict) and limits.get("memory"))):
+        memory_limit = service.get("mem_limit") or (limits.get("memory") if isinstance(limits, dict) else None)
+        cpu_limit = service.get("cpus") or (limits.get("cpus") if isinstance(limits, dict) else None)
+        if not memory_limit:
             issues.append(f"{name}: memory limit is required")
-        if not (service.get("cpus") or (isinstance(limits, dict) and limits.get("cpus"))):
+        else:
+            try:
+                total_memory += _memory_bytes(memory_limit)
+            except ValueError:
+                issues.append(f"{name}: memory limit is invalid")
+        if not cpu_limit:
             issues.append(f"{name}: CPU limit is required")
+        else:
+            try:
+                total_cpu += float(cpu_limit)
+            except (TypeError, ValueError):
+                issues.append(f"{name}: CPU limit is invalid")
         if service.get("restart") != "unless-stopped":
             issues.append(f"{name}: restart must be unless-stopped")
         if service.get("privileged") is True:
@@ -479,12 +397,35 @@ def validate_compose(project: Project) -> dict[str, Any]:
                 break
 
         ports = service.get("ports", [])
-        if DATABASE_SERVICE_RE.search(str(name)) and ports:
+        if _is_database_service(str(name), service) and ports:
             issues.append(f"{name}: database ports must not be published on the host")
 
     if issues:
         raise KaizoraError("Compose security/readiness checks failed:\n  - " + "\n  - ".join(issues))
+    resources = project.manifest.get("resources", {})
+    if "cpu" in resources and total_cpu > resources["cpu"] + 1e-9:
+        raise KaizoraError(f"Compose CPU limits total {total_cpu:g}, above kaizora.json resources.cpu ({resources['cpu']:g}).")
+    if "memory" in resources:
+        budget = _memory_bytes(resources["memory"])
+        if total_memory > budget:
+            raise KaizoraError(f"Compose memory limits total {total_memory} bytes, above kaizora.json resources.memory ({resources['memory']}).")
     return config
+
+
+def _memory_bytes(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("not a memory value")
+    if isinstance(value, int):
+        return value
+    text = str(value).strip().lower()
+    match = re.fullmatch(r"([0-9]+)(b|k|kb|kib|m|mb|mib|g|gb|gib|t|tb|tib)?", text)
+    if not match:
+        raise ValueError("not a memory value")
+    amount = int(match.group(1))
+    suffix = match.group(2) or "b"
+    exponent = {"b": 0, "k": 1, "kb": 1, "kib": 1, "m": 2, "mb": 2, "mib": 2,
+                "g": 3, "gb": 3, "gib": 3, "t": 4, "tb": 4, "tib": 4}[suffix]
+    return amount * (1024 ** exponent)
 
 
 def require_engine() -> None:
@@ -503,20 +444,29 @@ def wait_until_running(project: Project, expected_services: int, timeout: int) -
     while True:
         rows = compose_rows(project)
         last_state = project_state(rows)
+        if len(rows) >= expected_services and last_state == "UNHEALTHY":
+            raise KaizoraError("A container reported unhealthy after deployment.")
         if len(rows) >= expected_services and last_state == "RUNNING":
             health = [str(row.get("Health", row.get("health", ""))).lower() for row in rows]
             if not any(value in {"starting", "unhealthy"} for value in health):
                 return
-            if any(value == "unhealthy" for value in health):
-                raise KaizoraError("A container reported unhealthy after deployment.")
         if time.monotonic() >= deadline:
             raise KaizoraError(f"Services did not become ready within {timeout}s (last state: {last_state}).")
         time.sleep(2)
 
 
 def command_deploy(args: argparse.Namespace) -> int:
-    root = hosting_root(args)
-    project = load_project(root, args.project)
+    node = load_node_config(hosting_root(args))
+    project = load_project(node.projects_path, args.project)
+    if args.dry_run:
+        print(f"Dry run for {project.title} ({project.slug})")
+        if project.manifest.get("repository"):
+            print(f"- Fast-forward Git branch {project.manifest['branch']}")
+        print("- Validate Compose security and readiness settings")
+        print("- Build project images")
+        print("- Start/update containers and remove orphans")
+        print(f"- Wait up to {args.timeout}s for services to become ready")
+        return 0
     require_engine()
     update_from_git(project)
     config = validate_compose(project)
@@ -528,8 +478,8 @@ def command_deploy(args: argparse.Namespace) -> int:
 
 
 def command_lifecycle(args: argparse.Namespace) -> int:
-    root = hosting_root(args)
-    project = load_project(root, args.project)
+    node = load_node_config(hosting_root(args))
+    project = load_project(node.projects_path, args.project)
     require_engine()
     if args.action == "deploy":
         return command_deploy(args)
@@ -538,7 +488,8 @@ def command_lifecycle(args: argparse.Namespace) -> int:
 
 
 def command_logs(args: argparse.Namespace) -> int:
-    project = load_project(hosting_root(args), args.project)
+    node = load_node_config(hosting_root(args))
+    project = load_project(node.projects_path, args.project)
     require_engine()
     command = [*compose_prefix(project), "logs", "--tail", str(args.tail)]
     if args.follow:
@@ -548,48 +499,228 @@ def command_logs(args: argparse.Namespace) -> int:
     return 0
 
 
-def excluded_backup_path(relative: Path) -> bool:
-    if any(part in EXCLUDED_BACKUP_NAMES for part in relative.parts):
-        return True
-    filename = relative.name.lower()
-    if filename == ".env" or filename.startswith(".env.") or filename.endswith(".env"):
-        return True
-    return False
-
-
 def command_backup(args: argparse.Namespace) -> int:
-    root = hosting_root(args)
-    project = load_project(root, args.project)
-    backup_dir = root / "backups" / "project-configs"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive = backup_dir / f"{project.slug}-{stamp}.tar.gz"
+    node = load_node_config(hosting_root(args))
+    project = load_project(node.projects_path, args.project)
+    from .backup import create_backup
 
+    return create_backup(project, node, print)
+
+
+def _host_memory() -> str:
     try:
-        with tarfile.open(archive, "w:gz") as bundle:
-            for current, directories, files in os.walk(project.path, followlinks=False):
-                current_path = Path(current)
-                relative_dir = current_path.relative_to(project.path)
-                directories[:] = [
-                    name for name in sorted(directories)
-                    if not excluded_backup_path(relative_dir / name)
-                    and not (current_path / name).is_symlink()
-                ]
-                if relative_dir != Path("."):
-                    bundle.add(current_path, arcname=str(Path(project.slug) / relative_dir), recursive=False)
-                for filename in sorted(files):
-                    item = current_path / filename
-                    relative = item.relative_to(project.path)
-                    if excluded_backup_path(relative) or item.is_symlink() or not item.is_file():
-                        continue
-                    bundle.add(item, arcname=str(Path(project.slug) / relative), recursive=False)
-        archive.chmod(0o600)
-    except (OSError, tarfile.TarError) as exc:
-        archive.unlink(missing_ok=True)
-        raise KaizoraError(f"Could not create project backup: {exc}") from exc
+        values: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+            key, raw = line.split(":", 1)
+            values[key] = int(raw.strip().split()[0]) * 1024
+        total = values["MemTotal"]
+        available = values.get("MemAvailable", values.get("MemFree", 0))
+        used = total - available
+        gib = 1024 ** 3
+        return f"{used / gib:.1f} / {total / gib:.1f} GB"
+    except (OSError, ValueError, KeyError, IndexError):
+        return "unknown"
 
-    print(f"Project files backed up to {archive}")
-    print(".env files, Git metadata, dependency caches, symlinks, and Docker volumes are excluded.")
+
+def _host_disk(path: Path) -> str:
+    try:
+        usage = shutil.disk_usage(path if path.exists() else Path("/"))
+        gib = 1024 ** 3
+        return f"{(usage.total - usage.free) / gib:.0f} / {usage.total / gib:.0f} GB"
+    except OSError:
+        return "unknown"
+
+
+def _project_rows(projects: list[Project], docker_ready: bool) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
+    rows: dict[str, list[dict[str, Any]]] = {}
+    errors: dict[str, str] = {}
+    if not docker_ready:
+        return rows, errors
+    for project in projects:
+        try:
+            rows[project.slug] = compose_rows(project)
+        except KaizoraError as exc:
+            rows[project.slug] = []
+            errors[project.slug] = str(exc)
+    return rows, errors
+
+
+def command_node(args: argparse.Namespace) -> int:
+    node = load_node_config(hosting_root(args))
+    projects, errors = discover_projects(node.projects_path)
+    version, docker_issue = docker_info()
+    rows, row_errors = _project_rows(projects, bool(version))
+    running = sum(project_state(rows.get(project.slug, [])) in {"RUNNING", "UNHEALTHY", "STARTING", "PARTIAL"} for project in projects)
+    stopped = sum(project_state(rows.get(project.slug, [])) == "STOPPED" for project in projects)
+    unknown = len(projects) if not version else sum(
+        project.slug in row_errors or project_state(rows.get(project.slug, [])) == "UNKNOWN"
+        for project in projects
+    )
+    print("KAIZORA HOSTING\n")
+    print("Node\n────────────────────────")
+    print(f"Name          {node.name}")
+    print(f"ID            {node.node_id}")
+    print(f"Type          {node.type.title()}")
+    print(f"Environment   {node.environment}")
+    print(f"\nProjects      {len(projects)}")
+    print(f"Running       {running}")
+    print(f"Stopped       {stopped}")
+    if unknown:
+        print(f"Unknown       {unknown}")
+    print(f"\nDocker        {'Running' if version else 'Unavailable'}")
+    if not version and docker_issue:
+        print(f"              {docker_issue}")
+    if errors:
+        for error in errors:
+            print(f"Warning: {error}", file=sys.stderr)
+    if row_errors:
+        for slug, error in row_errors.items():
+            print(f"Warning: {slug}: {error}", file=sys.stderr)
+    return 0 if version and not errors and not row_errors else 1
+
+
+def _container_inspect(container_id: str) -> dict[str, Any] | None:
+    result = run_capture([docker_path(), "inspect", container_id], timeout=8)
+    if result.returncode:
+        return None
+    try:
+        values = json.loads(result.stdout)
+        return values[0] if values and isinstance(values[0], dict) else None
+    except (json.JSONDecodeError, IndexError, TypeError):
+        return None
+
+
+def _probe_project_http(project: Project, rows: list[dict[str, Any]]) -> bool | None:
+    configured_port = project.manifest.get("health", {}).get("port")
+    candidates: list[tuple[int, str]] = []
+    for row in rows:
+        container_id = str(row.get("ID", row.get("Id", "")))
+        if not container_id:
+            continue
+        detail = _container_inspect(container_id)
+        if not detail:
+            continue
+        state = detail.get("State", {})
+        if not state.get("Running"):
+            continue
+        config = detail.get("Config", {})
+        exposed = config.get("ExposedPorts") or {}
+        ports: list[int] = []
+        if configured_port is not None:
+            ports = [configured_port]
+        else:
+            for raw_port in exposed:
+                try:
+                    ports.append(int(str(raw_port).split("/", 1)[0]))
+                except ValueError:
+                    continue
+        networks = detail.get("NetworkSettings", {}).get("Networks", {})
+        net = networks.get(NETWORK_NAME, {})
+        address = net.get("IPAddress")
+        try:
+            ipaddress.ip_address(address)
+        except (ValueError, TypeError):
+            continue
+        for port in ports:
+            candidates.append((port, str(address)))
+
+    preferred = {80: 0, 443: 1, 8000: 2, 8080: 3, 3000: 4}
+    candidates.sort(key=lambda item: (preferred.get(item[0], 10), item[0]))
+    deadline = time.monotonic() + min(project.manifest.get("health", {}).get("timeout", 10), 10)
+    attempted = False
+    for port, address in candidates[:8]:
+        health_path = project.manifest.get("health", {}).get("path", "/")
+        timeout = min(project.manifest.get("health", {}).get("timeout", 10), deadline - time.monotonic())
+        if timeout <= 0:
+            break
+        attempted = True
+        try:
+            with build_opener(ProxyHandler({})).open(f"http://{address}:{port}{health_path}", timeout=timeout) as response:
+                if 200 <= response.status < 400:
+                    return True
+        except Exception:
+            continue
+    return False if attempted else None
+
+
+def _project_health(project: Project, rows: list[dict[str, Any]], docker_ready: bool) -> str:
+    if not docker_ready:
+        return "unknown"
+    if not rows:
+        return "stopped"
+    health = [str(row.get("Health", row.get("health", ""))).lower() for row in rows]
+    if "unhealthy" in health:
+        return "unhealthy"
+    if "starting" in health:
+        return "starting"
+    state = project_state(rows)
+    if state == "STOPPED":
+        return "stopped"
+    if state != "RUNNING":
+        return "unhealthy" if state == "PARTIAL" else "unknown"
+    configured_health = [value for value in health if value]
+    if len(configured_health) == len(rows) and all(value == "healthy" for value in configured_health):
+        return "healthy"
+    probe = _probe_project_http(project, rows)
+    if probe is True:
+        return "healthy"
+    if probe is False:
+        return "unhealthy"
+    return "running"
+
+
+def command_health(args: argparse.Namespace) -> int:
+    node = load_node_config(hosting_root(args))
+    projects, discovery_errors = discover_projects(node.projects_path)
+    version, _ = docker_info()
+    docker_ready = bool(version)
+    rows_by_slug, row_errors = _project_rows(projects, docker_ready)
+    print("KAIZORA HOSTING HEALTH\n")
+    print("Node\n" + node.name)
+    print("\nHost\n────────────────────────")
+    print(f"RAM             {_host_memory()}")
+    print(f"Disk            {_host_disk(node.config_path.parent)}")
+    print("\nServices\n────────────────────────")
+    print(f"Docker          {'healthy' if docker_ready else 'unhealthy'}")
+    cloudflared = run_capture([docker_path(), "inspect", "kaizora-cloudflared"], timeout=5) if docker_ready else None
+    if not docker_ready or cloudflared is None or cloudflared.returncode:
+        cloud_status = "not configured"
+    else:
+        detail = _container_inspect("kaizora-cloudflared") or {}
+        state = detail.get("State", {})
+        cloud_health = state.get("Health", {}).get("Status")
+        cloud_status = str(cloud_health or ("unknown" if state.get("Running") else "unhealthy"))
+    print(f"Cloudflare      {cloud_status}")
+    print("\nProjects\n────────────────────────")
+    counts = {"healthy": 0, "unhealthy": 0, "stopped": 0, "running": 0, "starting": 0, "unknown": 0}
+    for project in projects:
+        state = "unknown" if project.slug in row_errors else _project_health(project, rows_by_slug.get(project.slug, []), docker_ready)
+        if state in counts:
+            counts[state] += 1
+        print(f"{project.title:<24} {state}")
+    print("\nSummary")
+    print(f"{counts['healthy']} Healthy")
+    print(f"{counts['unhealthy']} Unhealthy")
+    print(f"{counts['stopped']} Stopped")
+    if counts["running"] or counts["starting"] or counts["unknown"]:
+        print(f"{counts['running']} Running without health signal")
+        print(f"{counts['starting']} Starting")
+        print(f"{counts['unknown']} Unknown")
+    if discovery_errors:
+        for error in discovery_errors:
+            print(f"Warning: {error}", file=sys.stderr)
+    if row_errors:
+        for slug, error in row_errors.items():
+            print(f"Warning: {slug}: {error}", file=sys.stderr)
+    return 1 if not docker_ready or discovery_errors or row_errors or counts["unhealthy"] or cloud_status == "unhealthy" else 0
+
+
+def command_backups(args: argparse.Namespace) -> int:
+    node = load_node_config(hosting_root(args))
+    project = load_project(node.projects_path, args.project)
+    from .backup import list_backups
+
+    list_backups(project, node.backups_path)
     return 0
 
 
@@ -609,6 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy = commands.add_parser("deploy", help="Pull a Git project, build it, and start its containers.")
     deploy.add_argument("project")
     deploy.add_argument("--timeout", type=int, default=60, help="Seconds to wait for running containers (default: 60).")
+    deploy.add_argument("--dry-run", action="store_true", help="Show deployment actions without changing containers or Git state.")
     deploy.set_defaults(handler=command_deploy)
 
     for action in ("start", "stop", "restart"):
@@ -623,9 +755,19 @@ def build_parser() -> argparse.ArgumentParser:
     logs.add_argument("services", nargs="*", help="Optional Compose service names.")
     logs.set_defaults(handler=command_logs)
 
-    backup = commands.add_parser("backup", help="Archive project files without .env files or Docker volumes.")
+    backup = commands.add_parser("backup", help="Back up project files, database, and project volumes.")
     backup.add_argument("project")
     backup.set_defaults(handler=command_backup)
+
+    backups = commands.add_parser("backups", help="List backup snapshots for a project.")
+    backups.add_argument("project")
+    backups.set_defaults(handler=command_backups)
+
+    node = commands.add_parser("node", help="Show node identity and project counts.")
+    node.set_defaults(handler=command_node)
+
+    health = commands.add_parser("health", help="Check Docker and project health.")
+    health.set_defaults(handler=command_health)
     return parser
 
 
@@ -640,6 +782,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return int(args.handler(args))
     except KaizoraError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"ERROR: Operating system error: {exc.strerror or exc}", file=sys.stderr)
         return 1
 
 
