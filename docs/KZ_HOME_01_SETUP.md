@@ -65,7 +65,14 @@ PID 1 should be `systemd`. Resolve any systemd/WSL error before installing the n
 
 ## 3. Install Docker Engine
 
-For Ubuntu, install Docker Engine and the Compose v2 plugin using Docker's current official Ubuntu instructions. For Kali, use Kali's current package repository; do not use Ubuntu-specific repository commands. Package names can differ on Kali Rolling. After `apt update`, inspect available candidates with `apt-cache policy docker.io docker-compose docker-compose-v2 docker-compose-plugin`, then install Docker Engine and the package that provides Compose v2. Do not assume a `docker-compose` command is Compose v2. Do not continue unless `docker compose version` reports Compose v2. Do not use a convenience script from this repository to install system packages. Docker group access is effectively root access; use the host's normal security policy.
+For Ubuntu, install Docker Engine and the Compose v2 plugin using Docker's current official Ubuntu instructions. For Kali, use Kali's package repository rather than Ubuntu-specific repository commands. On KZ-HOME-01, the Kali repository provides `docker.io` and `docker-compose` version 2.40.3; install those packages (a separate `apt upgrade` is not required):
+
+```bash
+apt update
+apt install -y docker.io docker-compose
+```
+
+Package names can change on Kali Rolling. Do not assume a `docker-compose` command is Compose v2; continue only if `docker compose version` reports v2. Do not use a convenience script from this repository to install system packages. Docker group access is effectively root access; use the host's normal security policy.
 
 Enable and start Docker from the chosen distribution (omit `sudo` if the terminal is already running as root):
 
