@@ -6,6 +6,7 @@
 *.secret
 credentials/
 tokens/
+.kaizora.local.json
 *.token
 *.key
 *.pem

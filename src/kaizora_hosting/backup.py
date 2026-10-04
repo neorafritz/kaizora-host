@@ -179,6 +179,39 @@ def _archive_database(project: Project, service: str, engine: str, target: Path)
     )
 
 
+def _managed_database(node: NodeConfig, project: Project) -> tuple[Path, str] | None:
+    directory = node.databases_path / project.slug
+    secret_file = directory / ".env"
+    compose_file = directory / "compose.yaml"
+    if not directory.is_dir() or secret_file.is_symlink() or not secret_file.is_file() or not compose_file.is_file():
+        return None
+    try:
+        compose = compose_file.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = re.search(r"^\s+image:\s+(mysql|mariadb|postgres)(?::|@)", compose, re.M | re.I)
+    if not match:
+        return None
+    image = match.group(1).lower()
+    engine = "postgres" if image == "postgres" else image
+    return directory, engine
+
+
+def _archive_managed_database(directory: Path, project: Project, engine: str, target: Path) -> None:
+    if engine not in {"mysql", "mariadb", "postgres"}:
+        raise KaizoraError("Managed database uses an unsupported engine.")
+    script = POSTGRES_DUMP if engine == "postgres" else MARIADB_DUMP if engine == "mariadb" else MYSQL_DUMP
+    command = [
+        _docker(), "compose", "--project-name", f"kzdb-{project.slug}",
+        "--project-directory", str(directory), "--file", str(directory / "compose.yaml"),
+        "exec", "-T", "database", "sh", "-ec", script,
+    ]
+    _stream_process_to_gzip(
+        command, target, 600,
+        f"Database backup failed for {project.slug}; check the managed database and its in-container dump client.",
+    )
+
+
 def _named_volumes(config: dict[str, Any]) -> list[tuple[str, str]]:
     top_volumes = config.get("volumes", {})
     services = config.get("services", {})
@@ -315,6 +348,7 @@ def create_backup(project: Project, node: NodeConfig, emit: Callable[[str], None
         manifest["metadata"] = _metadata(project, config)
     except KaizoraError as exc:
         config_error = str(exc)
+    managed_database = _managed_database(node, project) if config_error is None else None
 
     emit("[2/4] Database")
     if project.manifest["backup"]["database"]:
@@ -326,7 +360,18 @@ def create_backup(project: Project, node: NodeConfig, emit: Callable[[str], None
         else:
             databases = _db_services(config or {})
             if not databases:
-                emit("      skipped (no supported database service)")
+                if managed_database:
+                    database_dir, database_engine = managed_database
+                    try:
+                        _archive_managed_database(database_dir, project, database_engine, snapshot / "database.sql.gz")
+                        manifest["backup"]["database"] = {"status": "success", "engine": database_engine}
+                        emit("      success (managed database)")
+                    except KaizoraError as exc:
+                        manifest["backup"]["database"] = {"status": "failed", "error": str(exc)}
+                        failures.append(str(exc))
+                        emit("      failed")
+                else:
+                    emit("      skipped (no supported database service)")
             elif len(databases) != 1:
                 message = "Database backup supports one database service per project snapshot."
                 manifest["backup"]["database"] = {"status": "failed", "error": message}
@@ -354,6 +399,9 @@ def create_backup(project: Project, node: NodeConfig, emit: Callable[[str], None
             emit("      failed")
         else:
             volumes = _named_volumes(config or {})
+            if managed_database:
+                volumes.append(("managed-database", f"kzdb-{project.slug}_database-data"))
+                volumes.sort()
             if not volumes:
                 emit("      skipped (no project named volumes)")
             else:

@@ -163,6 +163,7 @@ def load_project(projects_path: Path, slug: str) -> Project:
         raise KaizoraError(f"Project does not exist: {slug}")
 
     manifest_path = project_path / MANIFEST_NAME
+    local_manifest_path = project_path / ".kaizora.local.json"
     if manifest_path.exists() or manifest_path.is_symlink():
         manifest_path = ensure_within(manifest_path, project_path, "Manifest path")
         try:
@@ -179,6 +180,20 @@ def load_project(projects_path: Path, slug: str) -> Project:
         raw = {}
         manifest_file = None
 
+    if local_manifest_path.exists() or local_manifest_path.is_symlink():
+        local_manifest_path = ensure_within(local_manifest_path, project_path, "Local manifest path")
+        try:
+            local_raw = json.loads(local_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise KaizoraError(f"Could not read {local_manifest_path}: {exc}") from exc
+        if not isinstance(local_raw, dict):
+            raise KaizoraError(f"{local_manifest_path} must contain a JSON object.")
+        unknown = sorted(set(local_raw) - SUPPORTED_FIELDS)
+        if unknown:
+            raise KaizoraError(f"{local_manifest_path} has unsupported field(s): {', '.join(unknown)}.")
+        raw.update(local_raw)
+        manifest_file = manifest_file or local_manifest_path
+
     compose_file = _compose_path(project_path, raw.get("compose_file"), manifest_file)
     if manifest_file is None:
         normalized = {
@@ -186,7 +201,7 @@ def load_project(projects_path: Path, slug: str) -> Project:
             "display_name": slug.replace("-", " ").title(),
             "slug": slug,
             "runtime": "docker",
-            "domain": None,
+            "domain": raw.get("domain"),
             "compose_file": compose_file.name,
             "repository": None,
             "branch": None,
@@ -194,6 +209,17 @@ def load_project(projects_path: Path, slug: str) -> Project:
             "health": {"path": "/", "timeout": 10, "port": None},
             "backup": {"project": True, "database": False, "volumes": False},
         }
+        domain = normalized["domain"]
+        if domain is not None and (
+            not isinstance(domain, str) or not domain.strip() or not DOMAIN_RE.fullmatch(domain.strip())
+        ):
+            raise KaizoraError(f"{local_manifest_path} field 'domain' must be a hostname without a URL scheme or path.")
+        normalized["domain"] = domain.strip().lower() if domain else None
+        normalized["repository"] = raw.get("repository")
+        normalized["branch"] = raw.get("branch")
+        if normalized["repository"]:
+            if not isinstance(normalized["repository"], str) or not isinstance(normalized["branch"], str) or not normalized["branch"].strip():
+                raise KaizoraError(f"{manifest_file} needs a valid 'repository' and 'branch'.")
         return Project(project_path, normalized, compose_file)
 
     name = raw.get("name")

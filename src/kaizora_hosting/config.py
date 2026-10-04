@@ -16,7 +16,7 @@ NODE_CONFIG_ENV = "KAIZORA_HOST_CONFIG"
 DEFAULT_NODE_ID = "kz-home-01"
 DEFAULT_NODE_NAME = "KZ-HOME-01"
 NODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-CONFIG_FIELDS = {"node_id", "name", "type", "environment", "projects_path", "backups_path", "infrastructure_path"}
+CONFIG_FIELDS = {"node_id", "name", "type", "environment", "projects_path", "backups_path", "databases_path", "infrastructure_path"}
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class NodeConfig:
     environment: str
     projects_path: Path
     backups_path: Path
+    databases_path: Path
     infrastructure_path: Path
     config_path: Path
 
@@ -40,6 +41,7 @@ def default_node_config(root: Path) -> NodeConfig:
         environment="production",
         projects_path=(root / "projects").resolve(),
         backups_path=(root / "backups").resolve(),
+        databases_path=(root / "databases").resolve(),
         infrastructure_path=(root / "infrastructure").resolve(),
         config_path=(root / "configs" / "node.json").resolve(),
     )
@@ -104,6 +106,7 @@ def load_node_config(root: Path) -> NodeConfig:
         environment=_required_text(data, "environment", defaults.environment),
         projects_path=_configured_path(data, "projects_path", defaults.projects_path, config_path.parent),
         backups_path=_configured_path(data, "backups_path", defaults.backups_path, config_path.parent),
+        databases_path=_configured_path(data, "databases_path", defaults.databases_path, config_path.parent),
         infrastructure_path=_configured_path(data, "infrastructure_path", defaults.infrastructure_path, config_path.parent),
         config_path=config_path,
     )

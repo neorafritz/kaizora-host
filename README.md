@@ -4,6 +4,8 @@ Kaizora Hosting is a small, single-node deployment engine for trusted internal p
 
 The cloud workspace can run the CLI and Docker validations, but it is not the Windows/WSL2 node. Cloudflare Tunnel and Windows boot behavior must be checked on KZ-HOME-01 itself. Do not commit `.env` files, passwords, tokens, private keys, or credentials.
 
+The local browser panel at `http://localhost:8787` is the owner interface for this node. It can create a static website or connect a Git/Compose project, manage project files, set a domain, create a private MySQL/MariaDB/PostgreSQL database, and control deployments and backups. It is intentionally local-only and has no customer accounts or billing.
+
 ## Requirements
 
 - Linux on WSL2; Ubuntu is recommended, and Kali Linux is supported by the bootstrap checks.
@@ -111,9 +113,17 @@ kz panel
 
 `kz backup` creates `backups/<project>/<YYYY-MM-DD_HHMMSS>/` and a `manifest.json`. It follows each `backup` boolean in `kaizora.json`, excludes `.env`, secret files, credentials directories, symlinks, Git metadata, and dependency caches, and writes archives and manifest with mode `0600`. Database dumps support one MySQL, MariaDB, or PostgreSQL service per snapshot, using the in-container environment for credentials and streaming output into gzip. Named volumes are selected only from that project's normalized Compose config and archived through a read-only temporary container on `--network none`. A missing DB or volume is `skipped`; a configured backup that fails yields an error and nonzero exit code. `kz backups` lists snapshots. Restore is intentionally not implemented until backup recovery is validated on the real node.
 
+## Browser panel
+
+Open `http://localhost:8787` on the Windows PC while the node is running. Use **Tambah Project** to create a static website or connect a Git repository with Docker Compose. Project cards open **File Manager**, **Domain**, and **Database**, alongside deploy, start, stop, restart, logs, and backup controls. Static-site files open directly in the `public/` folder. The file manager hides `.env`, credentials, tokens, private keys, and `.git`; uploads are limited to 20 MB and text editing to 1 MB.
+
+The panel listens only to `127.0.0.1` and has no login yet. Do not expose it through Cloudflare, a router, or another network interface. It manages this node for its owner; customer accounts and billing are not part of this milestone.
+
 ## Cloudflare Tunnel
 
-The no-token template is in `infrastructure/cloudflare/`. On the node, create the local token file and protect it:
+Open **Cloudflare** in the local panel. In Cloudflare Zero Trust, create a named tunnel, choose the Docker connector, copy its connector token, then paste it into the panel's password field. The panel saves it as `infrastructure/cloudflare/.env` with permission `0600` and starts the tunnel without showing the token again. Never put the token in Git, a URL, a screenshot, or chat.
+
+The token only connects the node to the tunnel. In Cloudflare Zero Trust → Networks → Tunnels → this tunnel → **Public Hostnames**, add one hostname for each project and route it to the target shown under that project's **Domain** page (for example, `http://kz-my-site-web:80` for a static project). The domain field in Kaizora is local project metadata; saving it does not create a Cloudflare route. Do not enable router port forwarding. You can also configure the template manually on the node:
 
 ```bash
 cd /srv/kaizora-hosting/infrastructure/cloudflare

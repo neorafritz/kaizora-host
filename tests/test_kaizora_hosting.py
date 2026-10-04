@@ -5,12 +5,14 @@ import gzip
 import io
 import json
 import os
+import re
 import stat
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from unittest import mock
 
@@ -19,7 +21,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from kaizora_hosting import backup, cli, panel
+from kaizora_hosting import backup, cli, panel, panel_admin
 from kaizora_hosting.config import default_node_config, load_node_config
 from kaizora_hosting.errors import KaizoraError
 from kaizora_hosting.manifest import discover_projects, load_project
@@ -104,6 +106,22 @@ class ManifestTests(unittest.TestCase):
             self.assertEqual([item.slug for item in projects], ["sample"])
             self.assertEqual(errors, [])
             self.assertFalse(project.manifest["backup"]["database"])
+
+    def test_local_manifest_overlay_preserves_git_project_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = self.make_project(Path(directory), manifest={"name": "sample", "repository": "https://github.com/example/sample.git", "branch": "main"})
+            (project_path / ".kaizora.local.json").write_text(json.dumps({"domain": "sample.example.com"}), encoding="utf-8")
+            project = load_project(project_path.parent, "sample")
+            self.assertEqual(project.domain, "sample.example.com")
+            self.assertEqual(project.manifest["repository"], "https://github.com/example/sample.git")
+            self.assertNotIn("domain", json.loads((project_path / "kaizora.json").read_text(encoding="utf-8")))
+
+    def test_invalid_local_manifest_overlay_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_path = self.make_project(Path(directory), manifest={"name": "sample"})
+            (project_path / ".kaizora.local.json").write_text('{"domain":"https://bad.example"}', encoding="utf-8")
+            with self.assertRaisesRegex(KaizoraError, "domain"):
+                load_project(project_path.parent, "sample")
 
 
 class BackupTests(unittest.TestCase):
@@ -333,6 +351,95 @@ class PanelTests(unittest.TestCase):
             with self.assertRaisesRegex(KaizoraError, "not supported"):
                 panel.cli_command(root, "sh", "sample")
 
+
+class PanelAdminTests(unittest.TestCase):
+    def test_static_project_creation_generates_safe_compose(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            projects = Path(directory) / "projects"
+            project = panel_admin.create_static_project(projects, "My Demo Site", "demo.example.com")
+            loaded = load_project(projects, project.slug)
+            compose = (project.path / "compose.yaml").read_text(encoding="utf-8")
+            self.assertEqual(loaded.slug, "my-demo-site")
+            self.assertEqual(loaded.domain, "demo.example.com")
+            self.assertTrue((project.path / "public" / "index.html").is_file())
+            self.assertEqual(stat.S_IMODE(project.path.stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE((project.path / "public").stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE((project.path / "public" / "index.html").stat().st_mode), 0o644)
+            self.assertIn("restart: unless-stopped", compose)
+            self.assertIn("kaizora-network", compose)
+            self.assertNotIn("ports:", compose)
+
+    def test_file_manager_upload_edit_delete_and_path_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = panel_admin.create_static_project(Path(directory) / "projects", "sample")
+            panel_admin.write_project_file(project, "public", "about.html", b"hello")
+            self.assertEqual(stat.S_IMODE((project.path / "public" / "about.html").stat().st_mode), 0o644)
+            saved = panel_admin.read_project_text(project, "public/about.html")
+            self.assertEqual(saved, "hello")
+            panel_admin.save_project_text(project, "public/about.html", "updated")
+            self.assertEqual(panel_admin.read_project_text(project, "public/about.html"), "updated")
+            (project.path / "public" / ".env").write_text("secret", encoding="utf-8")
+            (project.path / "public" / "private.secret").write_text("secret", encoding="utf-8")
+            _, entries = panel_admin.list_project_files(project, "public")
+            names = {name for name, _is_dir, _size in entries}
+            self.assertNotIn(".env", names)
+            self.assertNotIn("private.secret", names)
+            with self.assertRaisesRegex(KaizoraError, "inside this project"):
+                panel_admin.safe_project_path(project, "../../outside")
+            with self.assertRaisesRegex(KaizoraError, "hidden"):
+                panel_admin.read_project_text(project, "public/.env")
+            panel_admin.delete_project_file(project, "public/about.html")
+            self.assertFalse((project.path / "public" / "about.html").exists())
+
+    def test_domain_is_saved_in_local_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = panel_admin.create_static_project(Path(directory) / "projects", "sample")
+            panel_admin.update_project_domain(project, "www.example.com")
+            loaded = load_project(project.path.parent, project.slug)
+            self.assertEqual(loaded.domain, "www.example.com")
+            self.assertTrue((project.path / ".kaizora.local.json").is_file())
+
+    def test_managed_database_is_private_and_secret_file_is_0600(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node = default_node_config(root)
+            project = panel_admin.create_static_project(node.projects_path, "sample")
+            with mock.patch.object(panel_admin, "_docker_compose") as compose_start:
+                info = panel_admin.create_database(node, project, "postgres")
+            database_dir = node.databases_path / project.slug
+            self.assertEqual(stat.S_IMODE((database_dir / ".env").stat().st_mode), 0o600)
+            compose_text = (database_dir / "compose.yaml").read_text(encoding="utf-8")
+            self.assertIn("restart: unless-stopped", compose_text)
+            self.assertIn("external: true", compose_text)
+            self.assertNotIn("ports:", compose_text)
+            self.assertEqual(info["host"], "kz-sample-db")
+            self.assertEqual(info["port"], "5432")
+            compose_start.assert_called_once_with(database_dir, ["up", "-d"])
+            self.assertEqual(panel_admin.database_info(node, project), info)
+
+    def test_start_database_reuses_managed_compose_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node = default_node_config(root)
+            project = panel_admin.create_static_project(node.projects_path, "sample")
+            database_dir = node.databases_path / project.slug
+            database_dir.mkdir(parents=True)
+            (database_dir / ".env").write_text("DB_NAME=sample\n", encoding="utf-8")
+            with mock.patch.object(panel_admin, "_docker_compose") as compose_start:
+                panel_admin.start_database(node, project)
+            compose_start.assert_called_once_with(database_dir, ["up", "-d"])
+
+    def test_cloudflare_token_is_saved_locally_with_restricted_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            infrastructure = Path(directory) / "infrastructure"
+            panel_admin.save_cloudflare_token(infrastructure, "private-token-value")
+            token_file = infrastructure / "cloudflare" / ".env"
+            self.assertTrue(panel_admin.cloudflare_token_configured(infrastructure))
+            self.assertEqual(stat.S_IMODE(token_file.stat().st_mode), 0o600)
+            self.assertEqual(token_file.read_text(encoding="utf-8"), "CF_TUNNEL_TOKEN=private-token-value\n")
+            with self.assertRaisesRegex(KaizoraError, "one line"):
+                panel_admin.save_cloudflare_token(infrastructure, "token with spaces")
+
     def test_panel_serves_dashboard_only_for_local_host_headers(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             panel.engine, "docker_info", return_value=(None, "Docker unavailable")
@@ -353,6 +460,114 @@ class PanelTests(unittest.TestCase):
                 with self.assertRaises(HTTPError) as failure:
                     urlopen(request, timeout=3)
                 self.assertEqual(failure.exception.code, 421)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_project_wizard_creates_static_site_in_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.engine, "docker_info", return_value=(None, "Docker unavailable")
+        ):
+            root = Path(directory)
+            server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.make_handler(root, "test-token"))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with urlopen(base + "/projects/new", timeout=3) as response:
+                    page = response.read().decode("utf-8")
+                self.assertIn("Website statis", page)
+                self.assertIn("Project dari Git", page)
+                payload = urlencode({
+                    "csrf": "test-token", "action": "create_static_project",
+                    "name": "My First Site", "domain": "first.example.com",
+                }).encode("utf-8")
+                request = Request(
+                    base + "/action", data=payload, method="POST",
+                    headers={"Origin": base, "Content-Type": "application/x-www-form-urlencoded"},
+                )
+                with urlopen(request, timeout=3) as response:
+                    result_page = response.read().decode("utf-8")
+                self.assertIn("my-first-site", result_page)
+                project = load_project(root / "projects", "my-first-site")
+                self.assertEqual(project.domain, "first.example.com")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_static_project_card_links_file_manager_to_public_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.engine, "docker_info", return_value=(None, "Docker unavailable")
+        ):
+            root = Path(directory)
+            panel_admin.create_static_project(root / "projects", "sample")
+            page = panel.render_dashboard(root, "test-token")
+            self.assertIn('href="/files?project=sample&amp;path=public"', page)
+
+    def test_database_start_action_returns_to_database_page(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.admin, "start_database", return_value=None
+        ):
+            root = Path(directory)
+            project = panel_admin.create_static_project(root / "projects", "sample")
+            server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.make_handler(root, "test-token"))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                payload = urlencode({
+                    "csrf": "test-token", "action": "start_database", "project": project.slug,
+                }).encode("utf-8")
+                request = Request(
+                    base + "/action", data=payload, method="POST",
+                    headers={"Origin": base, "Content-Type": "application/x-www-form-urlencoded"},
+                )
+                with urlopen(request, timeout=3) as response:
+                    page = response.read().decode("utf-8")
+                self.assertIn("Database sudah diminta untuk berjalan", page)
+                self.assertIn("Database · sample", page)
+                panel.admin.start_database.assert_called_once()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_multipart_upload_form_parser_keeps_file_bytes(self) -> None:
+        boundary = "kz-test-boundary"
+        body = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"action\"\r\n\r\nupload_file\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"index.html\"\r\n"
+            "Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("ascii") + b"<h1>Kaizora</h1>\x00" + f"\r\n--{boundary}--\r\n".encode("ascii")
+        values = panel._parse_multipart(f"multipart/form-data; boundary={boundary}", body)
+        self.assertEqual(values["action"], "upload_file")
+        self.assertEqual(values["file_name"], "index.html")
+        self.assertEqual(values["file_bytes"], b"<h1>Kaizora</h1>\x00")
+
+    def test_cloudflare_token_form_does_not_echo_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.admin, "start_cloudflare", return_value=None
+        ):
+            root = Path(directory)
+            server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.make_handler(root, "test-token"))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            secret = "private-cloudflare-token-do-not-print"
+            try:
+                payload = urlencode({
+                    "csrf": "test-token", "action": "configure_cloudflare", "tunnel_token": secret,
+                }).encode("utf-8")
+                request = Request(
+                    base + "/action", data=payload, method="POST",
+                    headers={"Origin": base, "Content-Type": "application/x-www-form-urlencoded"},
+                )
+                with urlopen(request, timeout=3) as response:
+                    page = response.read().decode("utf-8")
+                self.assertIn("Token tersimpan", page)
+                self.assertNotIn(secret, page)
+                self.assertNotIn(secret, response.geturl())
+                secret_file = root / "infrastructure" / "cloudflare" / ".env"
+                self.assertEqual(stat.S_IMODE(secret_file.stat().st_mode), 0o600)
             finally:
                 server.shutdown()
                 server.server_close()

@@ -115,11 +115,23 @@ On the node, bootstrap enables `kaizora-panel.service` under systemd. Open this 
 http://localhost:8787
 ```
 
-The panel shows node health and projects, and provides deploy, start, stop, restart, logs, and backup controls. It listens only on `127.0.0.1` and has no login yet. Keep it local: do not route it through Cloudflare, a router, or another network interface. To check the service, run `systemctl status kaizora-panel`; WSL must be running for the page to load. If systemd is not active, `kz panel` starts the same panel in the foreground; press Ctrl+C to stop it.
+The panel shows node health and projects. Use **Tambah Project** to make a static site or connect a Git repository with Docker Compose. Project cards open **File Manager**, **Domain**, and **Database**, alongside deployment and backup actions. For a static site, File Manager opens the web files in `public/`; changes there are served immediately. The database page can create one private MySQL, MariaDB, or PostgreSQL container for a project and shows its connection details. It creates a random password and keeps it in a local `.env` file with permission `0600`; it does not publish a database port.
+
+The panel listens only on `127.0.0.1` and has no login yet. Keep it local: do not route it through Cloudflare, a router, or another network interface. To check the service, run `systemctl status kaizora-panel`; WSL must be running for the page to load. If systemd is not active, `kz panel` starts the same panel in the foreground; press Ctrl+C to stop it.
 
 ## 6. Configure Cloudflare Tunnel
 
-Create a local token file on KZ-HOME-01 only:
+### Connect Cloudflare to Kaizora
+
+1. Open `http://localhost:8787` on the Windows PC and select **Cloudflare** in the left menu.
+2. Sign in to Cloudflare Zero Trust. Open **Networks → Tunnels**, create a named tunnel for `KZ-HOME-01`, and select the Docker connector instructions.
+3. Copy the connector token Cloudflare provides. Paste it into the password field in the local Kaizora panel. The panel writes it only to `/srv/kaizora-hosting/infrastructure/cloudflare/.env` (permission `0600`) and starts `kaizora-cloudflared` on `kaizora-network`.
+4. Back in Cloudflare, open that tunnel's **Public Hostnames** and add each hostname. For a static project the target is `http://kz-<project-slug>-web:80`; the Domain page displays it. For a custom Compose project, use the application container/service name and its internal HTTP port. Do not route a hostname to a database.
+5. Save the hostname in the Kaizora **Domain** page too, so it is listed beside the project in the panel.
+
+The tunnel token does not create public hostname routes. Cloudflare account access is required to create the tunnel and add those routes; Codex cannot do those steps from this repository. Do not send the token in chat or put it in Git. No router port forwarding or database port publishing is needed.
+
+Manual alternative: create a local token file on KZ-HOME-01 only:
 
 ```bash
 cd /srv/kaizora-hosting/infrastructure/cloudflare
