@@ -7,8 +7,11 @@ import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from unittest import mock
 
 import sys
@@ -16,7 +19,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from kaizora_hosting import backup, cli
+from kaizora_hosting import backup, cli, panel
 from kaizora_hosting.config import default_node_config, load_node_config
 from kaizora_hosting.errors import KaizoraError
 from kaizora_hosting.manifest import discover_projects, load_project
@@ -259,6 +262,64 @@ class CliTests(unittest.TestCase):
             result = cli.main(["--root", directory, "status", "missing"])
         self.assertEqual(result, 1)
         self.assertIn("Project does not exist", errors.getvalue())
+
+
+class PanelTests(unittest.TestCase):
+    def test_panel_accepts_only_local_hosts_and_origins(self) -> None:
+        self.assertTrue(panel.is_local_host_header("localhost:8787", 8787))
+        self.assertTrue(panel.is_local_host_header("127.0.0.1", 8787))
+        self.assertFalse(panel.is_local_host_header("example.com:8787", 8787))
+        self.assertFalse(panel.is_local_host_header("localhost:9999", 8787))
+        self.assertTrue(panel.is_local_origin("http://localhost:8787", 8787))
+        self.assertFalse(panel.is_local_origin("https://localhost:8787", 8787))
+        self.assertFalse(panel.is_local_origin("http://example.com:8787", 8787))
+
+    def test_dashboard_is_local_and_escapes_notices(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.engine, "docker_info", return_value=(None, "Docker unavailable")
+        ):
+            page = panel.render_dashboard(Path(directory), "csrf-token", notice="<script>bad()</script>")
+        self.assertIn("Akses lokal", page)
+        self.assertIn("&lt;script&gt;bad()&lt;/script&gt;", page)
+        self.assertNotIn("<script>bad()</script>", page)
+        self.assertIn("Docker belum siap", page)
+
+    def test_panel_cli_action_uses_validated_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "projects" / "sample"
+            project.mkdir(parents=True)
+            (project / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+            (project / "kaizora.json").write_text(json.dumps({"name": "sample"}), encoding="utf-8")
+            command = panel.cli_command(root, "stop", "sample")
+            self.assertEqual(command[-2:], ["stop", "sample"])
+            with self.assertRaisesRegex(KaizoraError, "not supported"):
+                panel.cli_command(root, "sh", "sample")
+
+    def test_panel_serves_dashboard_only_for_local_host_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.engine, "docker_info", return_value=(None, "Docker unavailable")
+        ):
+            root = Path(directory)
+            server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.make_handler(root, "test-token"))
+            server.daemon_threads = True
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            url = f"http://127.0.0.1:{server.server_port}/"
+            try:
+                with urlopen(url, timeout=3) as response:
+                    page = response.read().decode("utf-8")
+                    self.assertEqual(response.status, 200)
+                self.assertIn("Kaizora Hosting", page)
+                self.assertIn("Akses lokal", page)
+                request = Request(url, headers={"Host": "attacker.example"})
+                with self.assertRaises(HTTPError) as failure:
+                    urlopen(request, timeout=3)
+                self.assertEqual(failure.exception.code, 421)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
 
 
 def tarfile_open(path: Path):

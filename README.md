@@ -1,6 +1,6 @@
 # Kaizora Hosting
 
-Kaizora Hosting is a small, single-node deployment engine for trusted internal projects. This repository continues the existing Python CLI and Docker Compose design for the target node **KZ-HOME-01**. It does not include a web dashboard or public customer hosting features.
+Kaizora Hosting is a small, single-node deployment engine for trusted internal projects. This repository continues the existing Python CLI and Docker Compose design for the target node **KZ-HOME-01**, with a local-only browser control panel. It does not include public customer hosting features.
 
 The cloud workspace can run the CLI and Docker validations, but it is not the Windows/WSL2 node. Cloudflare Tunnel and Windows boot behavior must be checked on KZ-HOME-01 itself. Do not commit `.env` files, passwords, tokens, private keys, or credentials.
 
@@ -40,7 +40,7 @@ cd ~/kaizora-host
 sudo bash scripts/bootstrap-node.sh
 ```
 
-The script checks Ubuntu or Kali Linux, Python, Docker, Compose, and daemon access; creates missing directories and a default node config; ensures `kaizora-network` exists; and installs `/usr/local/bin/kz`. It does not install Docker, request a sudo password, change Windows settings, open firewall ports, or configure port forwarding. Existing node config and data are preserved. See the full [KZ-HOME-01 deployment guide](docs/KZ_HOME_01_SETUP.md). Kali package installation still needs validation on the real node.
+The script checks Ubuntu or Kali Linux, Python, Docker, Compose, and daemon access; creates missing directories and a default node config; ensures `kaizora-network` exists; installs `/usr/local/bin/kz`; and enables a local-only browser panel service when systemd is active. It does not install Docker, request a sudo password, change Windows settings, open firewall ports, or configure port forwarding. Existing node config and data are preserved. See the full [KZ-HOME-01 deployment guide](docs/KZ_HOME_01_SETUP.md).
 
 The default layout is:
 
@@ -104,6 +104,7 @@ kz restart <project>
 kz logs <project> [--follow] [--tail lines] [service ...]
 kz backup <project>
 kz backups <project>
+kz panel
 ```
 
 `kz deploy --dry-run` prints the intended steps without pulling Git or changing containers. `kz health` reports Cloudflare as `not configured` if the named tunnel container is absent; it does not infer tunnel health from a running project.

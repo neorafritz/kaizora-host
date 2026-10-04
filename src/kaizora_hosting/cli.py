@@ -724,6 +724,12 @@ def command_backups(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_panel(args: argparse.Namespace) -> int:
+    from .panel import run_panel
+
+    return run_panel(hosting_root(args), args.port)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kz", description="Manage projects on a Kaizora Hosting node.")
     parser.add_argument("--root", help="Hosting root (default: /srv/kaizora-hosting or KZ_HOSTING_ROOT).")
@@ -768,6 +774,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     health = commands.add_parser("health", help="Check Docker and project health.")
     health.set_defaults(handler=command_health)
+
+    panel = commands.add_parser("panel", help="Start the local-only browser control panel.")
+    panel.add_argument("--port", type=int, default=8787, help="Local panel port (default: 8787).")
+    panel.set_defaults(handler=command_panel)
     return parser
 
 
@@ -778,6 +788,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--timeout must be at least 1 second")
     if getattr(args, "tail", 1) < 0:
         parser.error("--tail cannot be negative")
+    if getattr(args, "port", 1) < 1 or getattr(args, "port", 65535) > 65535:
+        parser.error("--port must be between 1 and 65535")
     try:
         return int(args.handler(args))
     except KaizoraError as exc:

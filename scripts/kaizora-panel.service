@@ -1,0 +1,16 @@
+[Unit]
+Description=Kaizora Hosting local browser panel
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/kz panel
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

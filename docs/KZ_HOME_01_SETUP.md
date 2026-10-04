@@ -95,7 +95,7 @@ cd ~/kaizora-host
 sudo bash scripts/bootstrap-node.sh
 ```
 
-The script creates `/srv/kaizora-hosting/{engine,projects,configs,infrastructure,backups,databases,logs}`, writes `configs/node.json` only when it does not exist, ensures `kaizora-network` exists, and installs the `kz` command at `/usr/local/bin/kz`. It leaves existing configuration and project data intact. It does not configure Windows startup, Cloudflare, firewall rules, or router forwarding.
+The script creates `/srv/kaizora-hosting/{engine,projects,configs,infrastructure,backups,databases,logs}`, writes `configs/node.json` only when it does not exist, ensures `kaizora-network` exists, installs the `kz` command at `/usr/local/bin/kz`, and enables a local panel service when systemd is active. It leaves existing configuration and project data intact. It does not configure Windows startup, Cloudflare, firewall rules, or router forwarding.
 
 If the repository is already checked out at `/srv/kaizora-hosting`, the sample project is present in that path. Otherwise, add or clone projects into the configured `projects_path` in `configs/node.json`. Inspect the initial node configuration:
 
@@ -107,7 +107,17 @@ kz projects
 
 For a non-default config location, set `KAIZORA_HOST_CONFIG=/absolute/path/to/node.json` in the shell or the node service environment. A missing explicit override is an error. The node JSON contains paths and identity, not credentials.
 
-## 5. Configure Cloudflare Tunnel
+## 5. Open the Kaizora browser panel
+
+On the node, bootstrap enables `kaizora-panel.service` under systemd. Open this address in a browser on the Windows PC:
+
+```text
+http://localhost:8787
+```
+
+The panel shows node health and projects, and provides deploy, start, stop, restart, logs, and backup controls. It listens only on `127.0.0.1` and has no login yet. Keep it local: do not route it through Cloudflare, a router, or another network interface. To check the service, run `systemctl status kaizora-panel`; WSL must be running for the page to load. If systemd is not active, `kz panel` starts the same panel in the foreground; press Ctrl+C to stop it.
+
+## 6. Configure Cloudflare Tunnel
 
 Create a local token file on KZ-HOME-01 only:
 
@@ -136,7 +146,7 @@ The Compose service uses `kaizora-network`, has `restart: unless-stopped`, and p
 
 In Cloudflare Zero Trust, configure each public hostname to route to the matching project container/service and internal port on `kaizora-network`. Test from an external network. Do not open host firewall ports for application traffic and do not add router port forwarding.
 
-## 6. Add a project
+## 7. Add a project
 
 Create one directory per project under the node's `projects_path`, containing the application source, a Compose file, and a `kaizora.json`. Example:
 
@@ -173,7 +183,7 @@ kz health
 
 `--dry-run` shows the steps but does not pull Git or change containers. Set application environment in a local project `.env` file with restrictive permissions; never commit it. Ensure the project Compose file does not print credentials in startup logs.
 
-## 7. Backups
+## 8. Backups
 
 Review a project's `backup` settings. Then create and list a snapshot:
 
@@ -186,7 +196,7 @@ Each snapshot contains `manifest.json`, project files (unless disabled), an opti
 
 Before relying on backups, create a test project with a disposable database and named volume on the real node, create snapshots, inspect archive contents/permissions, then validate recovery manually in an isolated environment. `kz restore` is intentionally not available in this milestone.
 
-## 8. Start WSL at Windows boot/login
+## 9. Start WSL at Windows boot/login
 
 WSL systemd starts enabled services when the distribution starts, but Windows must start the distribution. A practical per-user Task Scheduler task is:
 
@@ -201,7 +211,7 @@ WSL systemd starts enabled services when the distribution starts, but Windows mu
 
 With systemd enabled and Docker enabled at boot, the Docker service keeps the WSL distribution alive after startup. The Compose containers use `restart: unless-stopped`, so Docker restarts them. Verify that the account running the task can start the distribution and that Docker starts after a full Windows reboot.
 
-## 9. Real-node acceptance test
+## 10. Real-node acceptance test
 
 After setup and after adding a test hostname, perform this acceptance test from outside the Windows PC:
 

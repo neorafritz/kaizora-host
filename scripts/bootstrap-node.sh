@@ -101,6 +101,26 @@ fi
 
 bash "$REPO_DIR/scripts/install.sh"
 
+if command -v systemctl >/dev/null 2>&1 && [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == "systemd" ]]; then
+  PANEL_UNIT="/etc/systemd/system/kaizora-panel.service"
+  if [[ ! -e "$PANEL_UNIT" ]]; then
+    install -m 0644 "$REPO_DIR/scripts/kaizora-panel.service" "$PANEL_UNIT"
+    echo "Installed local Kaizora panel service."
+  elif cmp -s "$REPO_DIR/scripts/kaizora-panel.service" "$PANEL_UNIT"; then
+    echo "Keeping existing Kaizora panel service."
+  else
+    echo "Keeping custom $PANEL_UNIT unchanged; not enabling the panel service." >&2
+    PANEL_UNIT=""
+  fi
+  if [[ -n "$PANEL_UNIT" ]]; then
+    systemctl daemon-reload
+    systemctl enable --now kaizora-panel.service
+    echo "Kaizora panel is available at http://localhost:8787"
+  fi
+else
+  echo "systemd is not active; start the browser panel manually with: kz panel"
+fi
+
 if grep -qi microsoft /proc/version 2>/dev/null; then
   echo "WSL detected. This script does not configure Windows startup, WSL systemd, firewall, or port forwarding."
 else
