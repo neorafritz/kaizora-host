@@ -128,22 +128,24 @@ def render_dashboard(root: Path, token: str, *, notice: str = "", kind: str = "s
         in {"healthy", "running", "starting"}
         for project in projects
     )
-    disk_path = engine._host_disk_path(node.config_path.parent)
-    disk_is_windows = disk_path == Path("/mnt/c")
-    disk_label = "Disk Windows C:" if disk_is_windows else "Disk node"
-    disk_note = (
-        "Drive Windows C: dibaca langsung; data Kali/WSL memakai ruang pada drive tempat distro tersimpan."
-        if disk_is_windows
-        else "RAM dan disk menunjukkan kapasitas yang terlihat oleh node ini."
-    )
+    windows_drives = engine._windows_drive_paths()
+    if windows_drives:
+        disk_metrics = [
+            (f"Disk Windows {drive.name.upper()}:", engine._host_disk(drive)) for drive in windows_drives
+        ]
+        disk_note = "Angka menunjukkan kapasitas tiap drive Windows. Data Kali/WSL memakai ruang pada drive tempat distro tersimpan."
+    else:
+        disk_path = engine._host_disk_path(node.config_path.parent)
+        disk_metrics = [("Disk node", engine._host_disk(disk_path))]
+        disk_note = "RAM dan disk menunjukkan kapasitas yang terlihat oleh node ini."
     metrics = "".join(
         f'<div class="metric"><div class="metric-label">{_esc(label)}</div><div class="metric-value">{_esc(value)}</div></div>'
-        for label, value in (
+        for label, value in [
             ("Projects", len(projects)),
             ("Running", running),
             ("RAM Kali/WSL", engine._host_memory()),
-            (disk_label, engine._host_disk(disk_path)),
-        )
+            *disk_metrics,
+        ]
     )
     services = "".join(
         f'<div class="service"><div><div class="service-name">{_esc(name)}</div><div class="service-value {_status_class(status)}">{_esc(status)}</div></div><span class="status">{_esc(detail)}</span></div>'

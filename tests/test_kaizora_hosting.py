@@ -299,15 +299,27 @@ class PanelTests(unittest.TestCase):
         self.assertIn("Disk node", page)
         self.assertIn("kapasitas yang terlihat oleh node ini", page)
 
-    def test_wsl_dashboard_shows_windows_c_drive(self) -> None:
+    def test_wsl_dashboard_shows_all_windows_drives(self) -> None:
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             panel.engine, "docker_info", return_value=(None, "Docker unavailable")
-        ), mock.patch.object(panel.engine, "_host_disk_path", return_value=Path("/mnt/c")), mock.patch.object(
-            panel.engine, "_host_disk", return_value="60 / 1007 GB"
-        ):
+        ), mock.patch.object(
+            panel.engine, "_windows_drive_paths", return_value=[Path("/mnt/c"), Path("/mnt/d")]
+        ), mock.patch.object(panel.engine, "_host_disk", return_value="60 / 1007 GB"):
             page = panel.render_dashboard(Path(directory), "csrf-token")
         self.assertIn("Disk Windows C:", page)
-        self.assertIn("Drive Windows C: dibaca langsung", page)
+        self.assertIn("Disk Windows D:", page)
+        self.assertIn("kapasitas tiap drive Windows", page)
+
+    def test_wsl_discovery_lists_mounted_windows_drives(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            mount_root = Path(directory)
+            for name in ("c", "d", "not-a-drive"):
+                (mount_root / name).mkdir()
+            with mock.patch.object(cli, "_running_in_wsl", return_value=True):
+                self.assertEqual(
+                    cli._windows_drive_paths(mount_root),
+                    [mount_root / "c", mount_root / "d"],
+                )
 
     def test_panel_cli_action_uses_validated_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

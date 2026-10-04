@@ -529,10 +529,27 @@ def _running_in_wsl() -> bool:
         return False
 
 
-def _host_disk_path(path: Path, windows_mount: Path = Path("/mnt/c")) -> Path:
-    """Use Windows C: capacity under WSL, otherwise the node's filesystem."""
-    if _running_in_wsl() and windows_mount.is_dir():
-        return windows_mount
+def _windows_drive_paths(mount_root: Path = Path("/mnt")) -> list[Path]:
+    """Return mounted Windows drive roots exposed to WSL, such as /mnt/c and /mnt/d."""
+    if not _running_in_wsl():
+        return []
+    try:
+        return sorted(
+            (entry for entry in mount_root.iterdir() if re.fullmatch(r"[a-z]", entry.name) and entry.is_dir()),
+            key=lambda entry: entry.name,
+        )
+    except OSError:
+        return []
+
+
+def _host_disk_path(path: Path, windows_mount: Path | None = None) -> Path:
+    """Use a selected Windows drive under WSL, otherwise the node's filesystem."""
+    if _running_in_wsl():
+        if path.parent == Path("/mnt") and re.fullmatch(r"[a-z]", path.name) and path.is_dir():
+            return path
+        candidate = windows_mount or Path("/mnt/c")
+        if candidate.is_dir():
+            return candidate
     return path if path.exists() else Path("/")
 
 
