@@ -254,6 +254,18 @@ class CliTests(unittest.TestCase):
         project = mock.Mock()
         self.assertEqual(cli._project_health(project, [], True), "stopped")
 
+    def test_wsl_disk_reading_uses_windows_drive_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            windows_mount = root / "c"
+            windows_mount.mkdir()
+            node_disk = root / "node"
+            node_disk.mkdir()
+            with mock.patch.object(cli, "_running_in_wsl", return_value=True):
+                self.assertEqual(cli._host_disk_path(node_disk, windows_mount), windows_mount)
+            with mock.patch.object(cli, "_running_in_wsl", return_value=False):
+                self.assertEqual(cli._host_disk_path(node_disk, windows_mount), node_disk)
+
     def test_invalid_project_returns_nonzero(self) -> None:
         errors = io.StringIO()
         output = io.StringIO()
@@ -284,8 +296,18 @@ class PanelTests(unittest.TestCase):
         self.assertNotIn("<script>bad()</script>", page)
         self.assertIn("Docker belum siap", page)
         self.assertIn("RAM Kali/WSL", page)
-        self.assertIn("Disk virtual WSL", page)
-        self.assertIn("angka total bukan ruang yang sudah terpakai di Windows", page)
+        self.assertIn("Disk node", page)
+        self.assertIn("kapasitas yang terlihat oleh node ini", page)
+
+    def test_wsl_dashboard_shows_windows_c_drive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            panel.engine, "docker_info", return_value=(None, "Docker unavailable")
+        ), mock.patch.object(panel.engine, "_host_disk_path", return_value=Path("/mnt/c")), mock.patch.object(
+            panel.engine, "_host_disk", return_value="60 / 1007 GB"
+        ):
+            page = panel.render_dashboard(Path(directory), "csrf-token")
+        self.assertIn("Disk Windows C:", page)
+        self.assertIn("Drive Windows C: dibaca langsung", page)
 
     def test_panel_cli_action_uses_validated_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

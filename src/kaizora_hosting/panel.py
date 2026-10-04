@@ -128,13 +128,21 @@ def render_dashboard(root: Path, token: str, *, notice: str = "", kind: str = "s
         in {"healthy", "running", "starting"}
         for project in projects
     )
+    disk_path = engine._host_disk_path(node.config_path.parent)
+    disk_is_windows = disk_path == Path("/mnt/c")
+    disk_label = "Disk Windows C:" if disk_is_windows else "Disk node"
+    disk_note = (
+        "Drive Windows C: dibaca langsung; data Kali/WSL memakai ruang pada drive tempat distro tersimpan."
+        if disk_is_windows
+        else "RAM dan disk menunjukkan kapasitas yang terlihat oleh node ini."
+    )
     metrics = "".join(
         f'<div class="metric"><div class="metric-label">{_esc(label)}</div><div class="metric-value">{_esc(value)}</div></div>'
         for label, value in (
             ("Projects", len(projects)),
             ("Running", running),
             ("RAM Kali/WSL", engine._host_memory()),
-            ("Disk virtual WSL", engine._host_disk(node.config_path.parent)),
+            (disk_label, engine._host_disk(disk_path)),
         )
     )
     services = "".join(
@@ -185,7 +193,7 @@ def render_dashboard(root: Path, token: str, *, notice: str = "", kind: str = "s
     if not docker_ready:
         warnings += f'<div class="flash error">Docker belum siap: {_esc(docker_issue or "unknown error")}</div>'
     body = (
-        f'<section class="metrics">{metrics}</section><p class="metric-note">RAM dan disk adalah kapasitas yang terlihat oleh Kali/WSL. Disk virtual WSL tumbuh mengikuti pemakaian; angka total bukan ruang yang sudah terpakai di Windows.</p>'
+        f'<section class="metrics">{metrics}</section><p class="metric-note">{_esc(disk_note)}</p>'
         f'<div class="section-head"><h2>Services</h2><p>{_esc(node.name)} · {_esc(node.environment)}</p></div>'
         f'<section class="services">{services}</section><div class="section-head" id="projects"><h2>Projects</h2><p>{len(projects)} terdaftar · {running} berjalan</p></div>'
         f'{warnings}{project_content}'
