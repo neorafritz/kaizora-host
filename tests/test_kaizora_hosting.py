@@ -283,6 +283,9 @@ class PanelTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;bad()&lt;/script&gt;", page)
         self.assertNotIn("<script>bad()</script>", page)
         self.assertIn("Docker belum siap", page)
+        self.assertIn("RAM Kali/WSL", page)
+        self.assertIn("Disk virtual WSL", page)
+        self.assertIn("angka total bukan ruang yang sudah terpakai di Windows", page)
 
     def test_panel_cli_action_uses_validated_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

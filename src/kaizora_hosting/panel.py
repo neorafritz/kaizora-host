@@ -24,7 +24,7 @@ a{color:var(--blue);text-decoration:none}button{font:inherit}.layout{min-height:
 aside{padding:28px 18px;background:#0d1628;border-right:1px solid var(--line)}.brand{font-size:20px;font-weight:750;letter-spacing:.2px;margin:0 10px 4px}.brand span{color:var(--blue)}.subbrand{color:var(--muted);font-size:12px;margin:0 10px 34px}
 nav a{display:block;padding:11px 12px;border-radius:9px;color:#becbe0;margin:4px 0}nav a.active,nav a:hover{background:#192844;color:#fff}.aside-note{font-size:12px;color:var(--muted);margin:38px 10px 0}
 main{padding:34px clamp(18px,4vw,54px);max-width:1500px;width:100%}.topline{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:28px}.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:1.4px;color:var(--blue);font-weight:700}.title{font-size:29px;line-height:1.2;margin:5px 0}.subtitle{color:var(--muted);margin:5px 0 0}.local-pill,.status{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 11px;color:var(--muted);font-size:12px;white-space:nowrap}
-.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:20px 0 28px}.metric,.service,.project,.empty,.output{background:var(--panel);border:1px solid var(--line);border-radius:13px}.metric{padding:17px}.metric-label{color:var(--muted);font-size:12px}.metric-value{font-size:21px;font-weight:700;margin-top:8px;overflow-wrap:anywhere}.section-head{display:flex;justify-content:space-between;align-items:end;margin:30px 0 13px}.section-head h2{font-size:18px;margin:0}.section-head p{font-size:12px;color:var(--muted);margin:0}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:20px 0 8px}.metric,.service,.project,.empty,.output{background:var(--panel);border:1px solid var(--line);border-radius:13px}.metric{padding:17px}.metric-label{color:var(--muted);font-size:12px}.metric-value{font-size:21px;font-weight:700;margin-top:8px;overflow-wrap:anywhere}.metric-note{color:var(--muted);font-size:12px;margin:0 0 28px}.section-head{display:flex;justify-content:space-between;align-items:end;margin:30px 0 13px}.section-head h2{font-size:18px;margin:0}.section-head p{font-size:12px;color:var(--muted);margin:0}
 .services{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.service{padding:16px;display:flex;justify-content:space-between;align-items:center}.service-name{color:var(--muted);font-size:13px}.service-value{font-weight:650;margin-top:2px}.good{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
 .projects{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.project{padding:19px}.project-head{display:flex;justify-content:space-between;gap:10px;align-items:start}.project h3{margin:0;font-size:17px}.slug{color:var(--muted);font-size:12px;margin-top:3px}.domain{margin:15px 0;color:#c6d5ec;overflow-wrap:anywhere}.project-meta{display:flex;gap:18px;color:var(--muted);font-size:12px;flex-wrap:wrap}.actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:17px}.actions form{margin:0}.btn{background:#1c2b45;border:1px solid #314766;border-radius:7px;color:#eaf2ff;padding:7px 10px;cursor:pointer;font-size:12px}.btn:hover{border-color:var(--blue);background:#233b5e}.btn.primary{background:#2264b8;border-color:#347dd9}.btn.danger{color:#ffb4bf}.btn.link{display:inline-block}.empty{padding:28px;text-align:center;color:var(--muted)}.empty strong{display:block;color:var(--text);font-size:16px;margin-bottom:5px}
 .flash{padding:13px 15px;border:1px solid var(--line);border-radius:9px;margin-bottom:16px;white-space:pre-wrap;overflow-wrap:anywhere}.flash.success{border-color:#276e5c;color:#b1f3dc;background:#102921}.flash.error{border-color:#733b47;color:#ffc2cc;background:#2b171e}.output{padding:18px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#d5e1f3}.foot{color:var(--muted);font-size:12px;margin-top:30px}
@@ -133,8 +133,8 @@ def render_dashboard(root: Path, token: str, *, notice: str = "", kind: str = "s
         for label, value in (
             ("Projects", len(projects)),
             ("Running", running),
-            ("RAM host", engine._host_memory()),
-            ("Disk host", engine._host_disk(node.config_path.parent)),
+            ("RAM Kali/WSL", engine._host_memory()),
+            ("Disk virtual WSL", engine._host_disk(node.config_path.parent)),
         )
     )
     services = "".join(
@@ -185,7 +185,8 @@ def render_dashboard(root: Path, token: str, *, notice: str = "", kind: str = "s
     if not docker_ready:
         warnings += f'<div class="flash error">Docker belum siap: {_esc(docker_issue or "unknown error")}</div>'
     body = (
-        f'<section class="metrics">{metrics}</section><div class="section-head"><h2>Services</h2><p>{_esc(node.name)} · {_esc(node.environment)}</p></div>'
+        f'<section class="metrics">{metrics}</section><p class="metric-note">RAM dan disk adalah kapasitas yang terlihat oleh Kali/WSL. Disk virtual WSL tumbuh mengikuti pemakaian; angka total bukan ruang yang sudah terpakai di Windows.</p>'
+        f'<div class="section-head"><h2>Services</h2><p>{_esc(node.name)} · {_esc(node.environment)}</p></div>'
         f'<section class="services">{services}</section><div class="section-head" id="projects"><h2>Projects</h2><p>{len(projects)} terdaftar · {running} berjalan</p></div>'
         f'{warnings}{project_content}'
     )

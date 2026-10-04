@@ -114,7 +114,8 @@ if command -v systemctl >/dev/null 2>&1 && [[ "$(ps -p 1 -o comm= | tr -d '[:spa
   fi
   if [[ -n "$PANEL_UNIT" ]]; then
     systemctl daemon-reload
-    systemctl enable --now kaizora-panel.service
+    systemctl enable kaizora-panel.service
+    systemctl restart kaizora-panel.service
     echo "Kaizora panel is available at http://localhost:8787"
   fi
 else
