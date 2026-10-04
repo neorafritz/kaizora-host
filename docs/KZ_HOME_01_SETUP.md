@@ -1,6 +1,6 @@
 # KZ-HOME-01 setup and deployment guide
 
-This guide prepares the real Windows PC as an Ubuntu WSL2 hosting node. The Codex cloud environment is not that PC; no Windows settings, WSL startup, tunnel token, firewall, port forwarding, or Windows reboot behavior has been configured or tested here.
+This guide prepares the real Windows PC as an Ubuntu or Kali WSL2 hosting node. Ubuntu is the recommended target. The bootstrap accepts Kali, but its Docker package setup has not yet been validated on KZ-HOME-01. The Codex cloud environment is not that PC; no Windows settings, WSL startup, tunnel token, firewall, port forwarding, or Windows reboot behavior has been configured or tested here.
 
 Target milestone: **Kaizora Hosting v0.1 — KZ-HOME-01 READY FOR REAL NODE VALIDATION**.
 
@@ -9,7 +9,7 @@ Target milestone: **Kaizora Hosting v0.1 — KZ-HOME-01 READY FOR REAL NODE VALI
 ```text
 Windows
   ↓
-WSL2 Ubuntu
+WSL2 Linux (Ubuntu recommended; Kali supported)
   ↓
 systemd
   ↓
@@ -28,9 +28,9 @@ Internet → Cloudflare → Cloudflare Tunnel → private Docker network → app
 
 Do not configure router port forwarding. Databases must not publish ports on the Windows host.
 
-## 1. Prepare Ubuntu WSL2
+## 1. Prepare Ubuntu or Kali WSL2
 
-Install/update WSL2 and an Ubuntu distribution using Microsoft's supported installation steps. Open the Ubuntu terminal and confirm it is WSL2:
+The documented production path uses Ubuntu. If Kali is already installed, it can be used after Docker Engine and Compose v2 pass the checks below. From Windows PowerShell, start the chosen distribution with `wsl -d Ubuntu` or `wsl -d kali-linux`, then confirm it is WSL2:
 
 ```bash
 uname -a
@@ -41,7 +41,7 @@ Keep the repository and project data in the Linux filesystem (for example, under
 
 ## 2. Enable systemd in WSL
 
-In Ubuntu, edit `/etc/wsl.conf`:
+In the selected Linux distribution, edit `/etc/wsl.conf`:
 
 ```ini
 [boot]
@@ -54,7 +54,7 @@ For example, use `sudoedit /etc/wsl.conf`; preserve any existing WSL configurati
 wsl --shutdown
 ```
 
-Start Ubuntu again and verify:
+Start the distribution again and verify:
 
 ```bash
 ps -p 1 -o comm=
@@ -65,9 +65,9 @@ PID 1 should be `systemd`. Resolve any systemd/WSL error before installing the n
 
 ## 3. Install Docker Engine
 
-Install Docker Engine and the Compose v2 plugin for Ubuntu using Docker's current official Ubuntu instructions. Do not use a convenience script from this repository to install system packages. If you add the Ubuntu account to the `docker` group, understand that Docker group access is effectively root access; use the host's normal security policy.
+For Ubuntu, install Docker Engine and the Compose v2 plugin using Docker's current official Ubuntu instructions. For Kali, use Kali's current package repository; do not use Ubuntu-specific repository commands. Package names can differ on Kali Rolling. After `apt update`, inspect available candidates with `apt-cache policy docker.io docker-compose docker-compose-v2 docker-compose-plugin`, then install Docker Engine and the package that provides Compose v2. Do not assume a `docker-compose` command is Compose v2. Do not continue unless `docker compose version` reports Compose v2. Do not use a convenience script from this repository to install system packages. Docker group access is effectively root access; use the host's normal security policy.
 
-Enable and start Docker from Ubuntu:
+Enable and start Docker from the chosen distribution (omit `sudo` if the terminal is already running as root):
 
 ```bash
 sudo systemctl enable --now docker
@@ -80,7 +80,7 @@ docker info
 
 ## 4. Clone and bootstrap the node
 
-Clone the repository from Ubuntu and run the bootstrap:
+Clone the repository from the chosen distribution and run the bootstrap:
 
 ```bash
 git clone https://github.com/neorafritz/kaizora-host.git ~/kaizora-host
@@ -127,7 +127,7 @@ kz health
 
 The Compose service uses `kaizora-network`, has `restart: unless-stopped`, and publishes no host port. The CLI reports `unknown` or `not configured` if tunnel health cannot be established; a running container alone does not prove Cloudflare routing works.
 
-In Cloudflare Zero Trust, configure each public hostname to route to the matching project container/service and internal port on `kaizora-network`. Test from an external network. Do not open Windows/Ubuntu firewall ports for application traffic and do not add router port forwarding.
+In Cloudflare Zero Trust, configure each public hostname to route to the matching project container/service and internal port on `kaizora-network`. Test from an external network. Do not open host firewall ports for application traffic and do not add router port forwarding.
 
 ## 6. Add a project
 
@@ -184,7 +184,7 @@ Before relying on backups, create a test project with a disposable database and 
 WSL systemd starts enabled services when the distribution starts, but Windows must start the distribution. A practical per-user Task Scheduler task is:
 
 1. Open **Task Scheduler** and choose **Create Task**.
-2. Name it `Kaizora Hosting WSL`; select **Run only when user is logged on**. Use the Windows account that owns the Ubuntu distribution.
+2. Name it `Kaizora Hosting WSL`; select **Run only when user is logged on**. Use the Windows account that owns the distribution.
 3. Add a trigger **At log on** for that account. If desired, add a short delay (for example, 30 seconds) to let networking settle.
 4. Add an action to start the distro and Docker service:
    - Program: `C:\Windows\System32\wsl.exe`
@@ -201,7 +201,7 @@ After setup and after adding a test hostname, perform this acceptance test from 
 ```text
 Restart Windows
 ↓
-Do not open Ubuntu or run any WSL/Linux command manually
+Do not open the chosen distribution or run any WSL/Linux command manually
 ↓
 Wait for Windows login and the scheduled task
 ↓

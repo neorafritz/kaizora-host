@@ -6,15 +6,15 @@ HOSTING_ROOT="${KZ_HOSTING_ROOT:-/srv/kaizora-hosting}"
 NODE_CONFIG="${KAIZORA_HOST_CONFIG:-$HOSTING_ROOT/configs/node.json}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "This bootstrap script supports Linux (Ubuntu/WSL2). It does not configure Windows." >&2
+  echo "This bootstrap script supports Ubuntu or Kali Linux on WSL2. It does not configure Windows." >&2
   exit 1
 fi
-if [[ -r /etc/os-release ]] && ! grep -Eq '^ID=ubuntu$|^ID_LIKE=.*ubuntu' /etc/os-release; then
-  echo "Ubuntu is the documented target. Review the script before using it on another Linux distribution." >&2
+if [[ -r /etc/os-release ]] && ! grep -Eq '^ID=(ubuntu|kali)$|^ID_LIKE=.*ubuntu' /etc/os-release; then
+  echo "This bootstrap supports Ubuntu or Kali Linux. Review the script before using another distribution." >&2
   exit 1
 fi
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 is required; install it using your normal Ubuntu administration process." >&2
+  echo "Python 3 is required; install it using your distribution's normal administration process." >&2
   exit 1
 fi
 if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'; then
@@ -22,11 +22,11 @@ if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) e
   exit 1
 fi
 if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is not installed. Install Docker Engine and the Compose v2 plugin for Ubuntu, then rerun this script." >&2
+  echo "Docker is not installed. Install Docker Engine and the Compose v2 plugin for this distribution, then rerun this script." >&2
   exit 1
 fi
 if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose v2 plugin is missing. Install it for Ubuntu, then rerun this script." >&2
+  echo "Docker Compose v2 plugin is missing. Install it for this distribution, then rerun this script." >&2
   exit 1
 fi
 if ! docker info >/dev/null 2>&1; then

@@ -6,7 +6,7 @@ The cloud workspace can run the CLI and Docker validations, but it is not the Wi
 
 ## Requirements
 
-- Linux; production instructions target Ubuntu on WSL2.
+- Linux on WSL2; Ubuntu is recommended, and Kali Linux is supported by the bootstrap checks.
 - Python 3.10 or newer; runtime code uses the standard library.
 - Docker Engine and the Docker Compose v2 plugin.
 - Docker network `kaizora-network`.
@@ -40,7 +40,7 @@ cd ~/kaizora-host
 sudo bash scripts/bootstrap-node.sh
 ```
 
-The script checks Ubuntu/Linux, Python, Docker, Compose, and daemon access; creates missing directories and a default node config; ensures `kaizora-network` exists; and installs `/usr/local/bin/kz`. It does not install Docker, request a sudo password, change Windows settings, open firewall ports, or configure port forwarding. Existing node config and data are preserved. See the full [KZ-HOME-01 deployment guide](docs/KZ_HOME_01_SETUP.md).
+The script checks Ubuntu or Kali Linux, Python, Docker, Compose, and daemon access; creates missing directories and a default node config; ensures `kaizora-network` exists; and installs `/usr/local/bin/kz`. It does not install Docker, request a sudo password, change Windows settings, open firewall ports, or configure port forwarding. Existing node config and data are preserved. See the full [KZ-HOME-01 deployment guide](docs/KZ_HOME_01_SETUP.md). Kali package installation still needs validation on the real node.
 
 The default layout is:
 
